@@ -1,0 +1,13 @@
+[project]
+name = "referral_fee"
+authors = [
+    { name = "508.dev", email = "admin@508.dev" }
+]
+description = "Auto-creates referral Purchase Invoices when a Sales Invoice is submitted, based on Project referrer settings."
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = []
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
