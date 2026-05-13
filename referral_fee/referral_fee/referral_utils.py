@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import today, add_years, getdate, flt
+from frappe.utils import today, add_years, getdate, flt, add_days
 
 # Item used as the line item in auto-generated referral Purchase Invoices.
 # "Internal Commission" is the existing item used for manual referral PIs in prod.
@@ -178,12 +178,12 @@ def _make_purchase_invoice(sales_invoice, supplier, amount):
         )
         or frappe.get_cached_value("Company", company, "cost_center")
     )
-
+    posting_date = today()
     pi = frappe.get_doc({
         "doctype": "Purchase Invoice",
         "supplier": supplier,
-        "posting_date": today(),
-        "due_date": today(),
+        "posting_date": posting_date,
+        "due_date": add_days(posting_date, 30),
         "company": company,
         "currency": sales_invoice.currency or "USD",
         # Accounting Dimensions — required for proper GL / project cost tracking.
