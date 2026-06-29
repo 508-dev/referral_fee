@@ -34,7 +34,7 @@
       "fieldtype": "Float",
       "in_list_view": 1,
       "label": "Percentage (%)",
-      "precision": "4",
+      "precision": "8",
       "reqd": 1,
       "columns": 2
     },
