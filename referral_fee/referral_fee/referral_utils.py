@@ -139,9 +139,14 @@ def validate_project_referrers(doc, method):
     if total > 100:
         frappe.throw(
             _("Referrer percentages total {0}% — cannot exceed 100%.").format(
-                frappe.bold(f"{total:g}")  # :g strips trailing zeros; no extra % here
+                frappe.bold(_format_percentage(total))
             )
         )
+
+
+def _format_percentage(value):
+    """Show precise percentages without trailing zero noise."""
+    return f"{value:.8f}".rstrip("0").rstrip(".")
 
 
 def _is_within_first_year(project, invoice_date):
