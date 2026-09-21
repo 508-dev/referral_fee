@@ -190,7 +190,9 @@ by both of these fields:
 - **Is Referral Fee** is checked.
 - **Referral Source Sales Invoice** links to the triggering Sales Invoice.
 
-Every submission decision is written as structured data to the site-level log:
+Every submission decision is written as structured data to the site-level log.
+Creation and cleanup success events are emitted only after the database transaction
+commits, so a later rollback cannot leave a false success record:
 
 ```text
 sites/<site>/logs/referral_fee.log

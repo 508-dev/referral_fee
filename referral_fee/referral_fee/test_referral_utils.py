@@ -32,6 +32,7 @@ class TestReferralInvoiceLogging(TestCase):
         self.assertEqual(entries[-1]["reason"], "missing_project")
 
     @patch.object(referral_utils.logger, "info")
+    @patch.object(frappe.db.after_commit, "add")
     @patch.object(referral_utils, "_make_purchase_invoice")
     @patch.object(frappe, "msgprint")
     @patch.object(frappe.db, "get_value", return_value=None)
@@ -42,6 +43,7 @@ class TestReferralInvoiceLogging(TestCase):
         _get_value,
         _msgprint,
         make_purchase_invoice,
+        after_commit_add,
         log_info,
     ):
         get_doc.return_value = frappe._dict(
@@ -66,6 +68,16 @@ class TestReferralInvoiceLogging(TestCase):
         make_purchase_invoice.assert_called_once_with(
             self.sales_invoice, "Test Supplier", 100.0
         )
+        immediate_entries = [call.args[0] for call in log_info.call_args_list]
+        self.assertNotIn(
+            "referral_invoice.created",
+            [entry["event"] for entry in immediate_entries],
+        )
+
+        self.assertEqual(after_commit_add.call_count, 2)
+        for call in after_commit_add.call_args_list:
+            call.args[0]()
+
         entries = [call.args[0] for call in log_info.call_args_list]
         created = next(
             entry for entry in entries if entry["event"] == "referral_invoice.created"
@@ -77,11 +89,16 @@ class TestReferralInvoiceLogging(TestCase):
         self.assertEqual(completed["created_count"], 1)
 
     @patch.object(referral_utils.logger, "info")
+    @patch.object(
+        frappe.db.after_commit,
+        "add",
+        side_effect=lambda callback: callback(),
+    )
     @patch.object(referral_utils, "_make_purchase_invoice")
     @patch.object(frappe.db, "get_value", return_value="ACC-PINV-TEST-00001")
     @patch.object(frappe, "get_doc")
     def test_logs_duplicate_skip_reason(
-        self, get_doc, _get_value, make_purchase_invoice, log_info
+        self, get_doc, _get_value, make_purchase_invoice, _after_commit_add, log_info
     ):
         get_doc.return_value = frappe._dict(
             {

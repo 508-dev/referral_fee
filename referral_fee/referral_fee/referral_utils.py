@@ -13,7 +13,7 @@ REFERRAL_FEE_ITEM = "Internal Commission"
 logger = frappe.logger("referral_fee", allow_site=True, file_count=20)
 
 
-def _log_sales_invoice_event(level, event, doc, **details):
+def _log_sales_invoice_event(level, event, doc, after_commit=False, **details):
     """Write a structured referral event with the source invoice context."""
     entry = {
         "event": event,
@@ -23,7 +23,14 @@ def _log_sales_invoice_event(level, event, doc, **details):
         "grand_total": flt(doc.grand_total),
     }
     entry.update(details)
-    getattr(logger, level)(entry)
+
+    def write_log():
+        getattr(logger, level)(entry)
+
+    if after_commit:
+        frappe.db.after_commit.add(write_log)
+    else:
+        write_log()
 
 
 def on_sales_invoice_submit(doc, method):
@@ -175,6 +182,7 @@ def on_sales_invoice_submit(doc, method):
             "info",
             "referral_invoice.created",
             doc,
+            after_commit=True,
             referrer_row=row_index,
             supplier=supplier,
             percentage=percentage,
@@ -186,6 +194,7 @@ def on_sales_invoice_submit(doc, method):
         "info",
         "referral_invoice.processing_completed",
         doc,
+        after_commit=True,
         created_count=len(created_pis),
         created_purchase_invoices=created_pis,
     )
@@ -233,6 +242,7 @@ def on_sales_invoice_cancel(doc, method):
         "info",
         "referral_invoice.cancel_cleanup_completed",
         doc,
+        after_commit=True,
         deleted_draft_purchase_invoices=draft_pis,
         submitted_purchase_invoices_requiring_manual_cancellation=submitted_pis,
     )
