@@ -1,3 +1,5 @@
+import logging
+
 import frappe
 from frappe import _
 from frappe.utils import add_days, add_years, flt, getdate, today
@@ -11,6 +13,7 @@ REFERRAL_FEE_ITEM = "Internal Commission"
 # intentionally separate from the general web log so a missing invoice can be
 # traced without reproducing the original Sales Invoice submission.
 logger = frappe.logger("referral_fee", allow_site=True, file_count=20)
+logger.setLevel(logging.INFO)
 
 
 def _log_sales_invoice_event(level, event, doc, after_commit=False, **details):
