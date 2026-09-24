@@ -1,5 +1,6 @@
+import logging
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import frappe
 
@@ -19,19 +20,32 @@ class TestReferralInvoiceLogging(TestCase):
             }
         )
 
-    @patch.object(referral_utils.logger, "info")
+    @patch.object(frappe, "logger")
     @patch.object(frappe, "get_doc")
-    def test_logs_missing_project_skip_reason(self, get_doc, log_info):
+    def test_logs_missing_project_skip_reason(self, get_doc, get_logger):
         self.sales_invoice.project = None
 
         referral_utils.on_sales_invoice_submit(self.sales_invoice, "on_submit")
 
         get_doc.assert_not_called()
+        event_logger = get_logger.return_value
+        self.assertEqual(
+            get_logger.call_args_list,
+            [
+                call("referral_fee", allow_site=True, file_count=20),
+                call("referral_fee", allow_site=True, file_count=20),
+            ],
+        )
+        self.assertEqual(
+            event_logger.setLevel.call_args_list,
+            [call(logging.INFO), call(logging.INFO)],
+        )
+        log_info = event_logger.info
         entries = [call.args[0] for call in log_info.call_args_list]
         self.assertEqual(entries[-1]["event"], "referral_invoice.skipped")
         self.assertEqual(entries[-1]["reason"], "missing_project")
 
-    @patch.object(referral_utils.logger, "info")
+    @patch.object(frappe, "logger")
     @patch.object(frappe.db.after_commit, "add")
     @patch.object(referral_utils, "_make_purchase_invoice")
     @patch.object(frappe, "msgprint")
@@ -44,7 +58,7 @@ class TestReferralInvoiceLogging(TestCase):
         _msgprint,
         make_purchase_invoice,
         after_commit_add,
-        log_info,
+        get_logger,
     ):
         get_doc.return_value = frappe._dict(
             {
@@ -68,6 +82,7 @@ class TestReferralInvoiceLogging(TestCase):
         make_purchase_invoice.assert_called_once_with(
             self.sales_invoice, "Test Supplier", 100.0
         )
+        log_info = get_logger.return_value.info
         immediate_entries = [call.args[0] for call in log_info.call_args_list]
         self.assertNotIn(
             "referral_invoice.created",
@@ -88,7 +103,7 @@ class TestReferralInvoiceLogging(TestCase):
         self.assertEqual(completed["event"], "referral_invoice.processing_completed")
         self.assertEqual(completed["created_count"], 1)
 
-    @patch.object(referral_utils.logger, "info")
+    @patch.object(frappe, "logger")
     @patch.object(
         frappe.db.after_commit,
         "add",
@@ -98,7 +113,7 @@ class TestReferralInvoiceLogging(TestCase):
     @patch.object(frappe.db, "get_value", return_value="ACC-PINV-TEST-00001")
     @patch.object(frappe, "get_doc")
     def test_logs_duplicate_skip_reason(
-        self, get_doc, _get_value, make_purchase_invoice, _after_commit_add, log_info
+        self, get_doc, _get_value, make_purchase_invoice, _after_commit_add, get_logger
     ):
         get_doc.return_value = frappe._dict(
             {
@@ -117,6 +132,7 @@ class TestReferralInvoiceLogging(TestCase):
         referral_utils.on_sales_invoice_submit(self.sales_invoice, "on_submit")
 
         make_purchase_invoice.assert_not_called()
+        log_info = get_logger.return_value.info
         entries = [call.args[0] for call in log_info.call_args_list]
         skipped = next(
             entry
@@ -128,8 +144,7 @@ class TestReferralInvoiceLogging(TestCase):
             skipped["existing_purchase_invoice"], "ACC-PINV-TEST-00001"
         )
 
-    @patch.object(referral_utils.logger, "exception")
-    @patch.object(referral_utils.logger, "info")
+    @patch.object(frappe, "logger")
     @patch.object(
         referral_utils,
         "_make_purchase_invoice",
@@ -142,8 +157,7 @@ class TestReferralInvoiceLogging(TestCase):
         get_doc,
         _get_value,
         _make_purchase_invoice,
-        _log_info,
-        log_exception,
+        get_logger,
     ):
         get_doc.return_value = frappe._dict(
             {
@@ -162,6 +176,7 @@ class TestReferralInvoiceLogging(TestCase):
         with self.assertRaisesRegex(RuntimeError, "insert failed"):
             referral_utils.on_sales_invoice_submit(self.sales_invoice, "on_submit")
 
+        log_exception = get_logger.return_value.exception
         entry = log_exception.call_args.args[0]
         self.assertEqual(entry["event"], "referral_invoice.creation_failed")
         self.assertEqual(entry["supplier"], "Test Supplier")

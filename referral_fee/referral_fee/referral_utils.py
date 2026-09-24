@@ -9,11 +9,12 @@ from frappe.utils import add_days, add_years, flt, getdate, today
 # Change this if Caleb decides to use a different item.
 REFERRAL_FEE_ITEM = "Internal Commission"
 
-# Keep a dedicated, site-level audit trail for referral invoice decisions. This is
-# intentionally separate from the general web log so a missing invoice can be
-# traced without reproducing the original Sales Invoice submission.
-logger = frappe.logger("referral_fee", allow_site=True, file_count=20)
-logger.setLevel(logging.INFO)
+
+def _get_referral_logger():
+    """Return the dedicated INFO-level audit logger for the current Frappe site."""
+    event_logger = frappe.logger("referral_fee", allow_site=True, file_count=20)
+    event_logger.setLevel(logging.INFO)
+    return event_logger
 
 
 def _log_sales_invoice_event(level, event, doc, after_commit=False, **details):
@@ -28,7 +29,7 @@ def _log_sales_invoice_event(level, event, doc, after_commit=False, **details):
     entry.update(details)
 
     def write_log():
-        getattr(logger, level)(entry)
+        getattr(_get_referral_logger(), level)(entry)
 
     if after_commit:
         frappe.db.after_commit.add(write_log)
