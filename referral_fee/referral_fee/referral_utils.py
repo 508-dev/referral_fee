@@ -1,11 +1,40 @@
+import logging
+
 import frappe
 from frappe import _
-from frappe.utils import today, add_years, getdate, flt, add_days
+from frappe.utils import add_days, add_years, flt, getdate, today
 
 # Item used as the line item in auto-generated referral Purchase Invoices.
 # "Internal Commission" is the existing item used for manual referral PIs in prod.
 # Change this if Caleb decides to use a different item.
 REFERRAL_FEE_ITEM = "Internal Commission"
+
+
+def _get_referral_logger():
+    """Return the dedicated INFO-level audit logger for the current Frappe site."""
+    event_logger = frappe.logger("referral_fee", allow_site=True, file_count=20)
+    event_logger.setLevel(logging.INFO)
+    return event_logger
+
+
+def _log_sales_invoice_event(level, event, doc, after_commit=False, **details):
+    """Write a structured referral event with the source invoice context."""
+    entry = {
+        "event": event,
+        "sales_invoice": doc.name,
+        "customer": doc.customer,
+        "project": doc.project,
+        "grand_total": flt(doc.grand_total),
+    }
+    entry.update(details)
+
+    def write_log():
+        getattr(_get_referral_logger(), level)(entry)
+
+    if after_commit:
+        frappe.db.after_commit.add(write_log)
+    else:
+        write_log()
 
 
 def on_sales_invoice_submit(doc, method):
@@ -14,16 +43,36 @@ def on_sales_invoice_submit(doc, method):
     For each referrer defined on the linked Project, creates one Draft Purchase Invoice.
     Amount = grand_total × referrer_percentage%
     """
+    _log_sales_invoice_event("info", "referral_invoice.processing_started", doc)
+
     if not doc.project:
+        _log_sales_invoice_event(
+            "info",
+            "referral_invoice.skipped",
+            doc,
+            reason="missing_project",
+        )
         return
 
     try:
         project = frappe.get_doc("Project", doc.project)
     except frappe.DoesNotExistError:
+        _log_sales_invoice_event(
+            "warning",
+            "referral_invoice.skipped",
+            doc,
+            reason="project_not_found",
+        )
         return
 
     referrers = project.get("referrers", [])
     if not referrers:
+        _log_sales_invoice_event(
+            "info",
+            "referral_invoice.skipped",
+            doc,
+            reason="no_project_referrers",
+        )
         return
 
     # ── First-year limit ──────────────────────────────────────────────────────
@@ -51,7 +100,30 @@ def on_sales_invoice_submit(doc, method):
 
     created_pis = []
     for row in referrers:
-        if not row.supplier or not flt(row.percentage):
+        supplier = row.supplier
+        percentage = flt(row.percentage)
+        row_index = row.get("idx")
+
+        if not supplier:
+            _log_sales_invoice_event(
+                "warning",
+                "referral_invoice.referrer_skipped",
+                doc,
+                reason="missing_supplier",
+                referrer_row=row_index,
+                percentage=percentage,
+            )
+            continue
+
+        if not percentage:
+            _log_sales_invoice_event(
+                "info",
+                "referral_invoice.referrer_skipped",
+                doc,
+                reason="zero_percentage",
+                referrer_row=row_index,
+                supplier=supplier,
+            )
             continue
 
         # Guard: skip if a non-cancelled PI already exists for this SI + supplier.
@@ -60,23 +132,76 @@ def on_sales_invoice_submit(doc, method):
             "Purchase Invoice",
             {
                 "referral_source_si": doc.name,
-                "supplier": row.supplier,
+                "supplier": supplier,
                 "docstatus": ["!=", 2],
             },
             "name",
         )
         if existing:
+            _log_sales_invoice_event(
+                "info",
+                "referral_invoice.referrer_skipped",
+                doc,
+                reason="duplicate_purchase_invoice",
+                referrer_row=row_index,
+                supplier=supplier,
+                percentage=percentage,
+                existing_purchase_invoice=existing,
+            )
             continue
 
         # Formula confirmed with Caleb (2026-05-01): grand_total × %
         # Rounding confirmed with Caleb (2026-05-04): nearest penny, Python standard rounding.
         # Example: $304.91 × 10% = $30.491 → rounds to $30.49
-        amount = round(flt(doc.grand_total) * flt(row.percentage) / 100, 2)
+        amount = round(flt(doc.grand_total) * percentage / 100, 2)
         if amount <= 0:
+            _log_sales_invoice_event(
+                "warning",
+                "referral_invoice.referrer_skipped",
+                doc,
+                reason="non_positive_amount",
+                referrer_row=row_index,
+                supplier=supplier,
+                percentage=percentage,
+                amount=amount,
+            )
             continue
 
-        pi = _make_purchase_invoice(doc, row.supplier, amount)
+        try:
+            pi = _make_purchase_invoice(doc, supplier, amount)
+        except Exception:
+            _log_sales_invoice_event(
+                "exception",
+                "referral_invoice.creation_failed",
+                doc,
+                referrer_row=row_index,
+                supplier=supplier,
+                percentage=percentage,
+                amount=amount,
+            )
+            raise
+
         created_pis.append(pi.name)
+        _log_sales_invoice_event(
+            "info",
+            "referral_invoice.created",
+            doc,
+            after_commit=True,
+            referrer_row=row_index,
+            supplier=supplier,
+            percentage=percentage,
+            amount=amount,
+            purchase_invoice=pi.name,
+        )
+
+    _log_sales_invoice_event(
+        "info",
+        "referral_invoice.processing_completed",
+        doc,
+        after_commit=True,
+        created_count=len(created_pis),
+        created_purchase_invoices=created_pis,
+    )
 
     if created_pis:
         links = ", ".join(
@@ -106,8 +231,25 @@ def on_sales_invoice_cancel(doc, method):
         pluck="name",
     )
 
+    _log_sales_invoice_event(
+        "info",
+        "referral_invoice.cancel_cleanup_started",
+        doc,
+        draft_purchase_invoices=draft_pis,
+        submitted_purchase_invoices=submitted_pis,
+    )
+
     for name in draft_pis:
         frappe.delete_doc("Purchase Invoice", name, ignore_permissions=True)
+
+    _log_sales_invoice_event(
+        "info",
+        "referral_invoice.cancel_cleanup_completed",
+        doc,
+        after_commit=True,
+        deleted_draft_purchase_invoices=draft_pis,
+        submitted_purchase_invoices_requiring_manual_cancellation=submitted_pis,
+    )
 
     if draft_pis:
         frappe.msgprint(

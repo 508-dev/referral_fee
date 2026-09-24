@@ -172,8 +172,36 @@ Run through these after any install or code change:
 | **Duplicate guard** | Submit same SI twice (or cancel + resubmit without amending) | Only one PI per referrer |
 | **Cancel cleanup** | Submit SI → Cancel SI | Draft PI deleted automatically |
 | **Amend flow** | Submit → Cancel → Amend → Resubmit | New PI created, no duplicates |
-| **No project** | Submit SI with no Project set | No PI created, no error |
-| **No referrers** | Submit SI against Project with empty Referrers tab | No PI created, no error |
+| **No project** | Submit SI with no Project set | No PI created; `missing_project` is logged |
+| **No referrers** | Submit SI against Project with empty Referrers tab | No PI created; `no_project_referrers` is logged |
+
+---
+
+## Troubleshooting Missing Referral Invoices
+
+The automation runs when a **Sales Invoice is submitted**, not when its customer
+payment is received. The submitted Sales Invoice must have its header-level
+**Project** field set; an invoice with no Project is intentionally skipped because
+the app has no Project Referrers table to use.
+
+Auto-generated Purchase Invoices can be distinguished from manually entered ones
+by both of these fields:
+
+- **Is Referral Fee** is checked.
+- **Referral Source Sales Invoice** links to the triggering Sales Invoice.
+
+Every submission decision is written as structured data to the site-level log.
+Creation and cleanup success events are emitted only after the database transaction
+commits, so a later rollback cannot leave a false success record:
+
+```text
+sites/<site>/logs/referral_fee.log
+```
+
+Useful events include `referral_invoice.created`,
+`referral_invoice.creation_failed`, and `referral_invoice.skipped`. Skip entries
+include an explicit reason such as `missing_project`, `no_project_referrers`, or
+`duplicate_purchase_invoice`, along with the source Sales Invoice context.
 
 ---
 
